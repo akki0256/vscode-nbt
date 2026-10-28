@@ -46,12 +46,12 @@ export class NbtDocument extends Disposable implements vscode.CustomDocument {
 		let file: NbtFile
 		try {
 			file = NbtFile.read(array, { littleEndian, bedrockHeader: littleEndian })
-			if (!littleEndian && file.root.size === 0) {
-				// if the file is empty, we try to read using little-endian
-				const bedrockFile = NbtFile.read(array, { littleEndian: true, bedrockHeader: true })
-				if (bedrockFile.root.size > 0) {
-					littleEndian = true
-					file = bedrockFile
+			if (file.root.size === 0) {
+				// if the file is empty, we try to read using the opposite endianness
+				const otherFile = NbtFile.read(array, { littleEndian: !littleEndian, bedrockHeader: !littleEndian })
+				if (otherFile.root.size > 0) {
+					littleEndian = !littleEndian
+					file = otherFile
 				}
 			}
 		} catch (e) {
@@ -146,7 +146,7 @@ export class NbtDocument extends Disposable implements vscode.CustomDocument {
 
 	public get isReadOnly() { return this._isReadOnly }
 
-	public get dataVersion() {
+	public get dataVersion(): number | undefined {
 		const file = this._documentData
 		if (file instanceof NbtRegion) {
 			const firstChunk = file.getFirstChunk()
@@ -156,6 +156,9 @@ export class NbtDocument extends Disposable implements vscode.CustomDocument {
 			// should be 1.12 but mcmeta doesn't have that, so using 1.14
 			// TODO: handle {Materials:"Pocket"} differently
 			return 1952
+		} else if (file.root.hasCompound('structure')) {
+			// bedrock mcstructure files don't have DataVersion, use the latest release instead
+			return undefined
 		} else {
 			return file.root.getNumber('DataVersion') ?? 0
 		}
@@ -215,6 +218,9 @@ export class NbtDocument extends Disposable implements vscode.CustomDocument {
 		const root = this._documentData.root
 		if (root.hasList('size', NbtType.Int, 3) && root.hasList('blocks') && root.hasList('palette')) {
 			return true // vanilla structure
+		}
+		if (root.hasList('size', NbtType.Int, 3) && root.hasCompound('structure')) {
+			return true // bedrock mcstructure
 		}
 		return false // anything else
 	}
