@@ -1,9 +1,20 @@
-import type { NbtChunk } from 'deepslate'
-import { NbtFile, NbtRegion, NbtType } from 'deepslate'
+import type { NbtChunk, NbtTag } from 'deepslate'
+import { NbtByteArray, NbtCompound, NbtFile, NbtRegion, NbtType } from 'deepslate'
 import * as vscode from 'vscode'
+import { deflateSync, inflateSync } from 'zlib'
 import { applyEdit, reverseEdit } from './common/Operations'
 import type { Logger, NbtEdit } from './common/types'
 import { Disposable } from './dispose'
+
+type CompressionMode = {
+	name: string,
+	inflate: (buffer: Uint8Array) => Uint8Array,
+	deflate: (buffer: Uint8Array) => Uint8Array,
+}
+
+const compressionModes: Record<number, CompressionMode> = {
+	1: { name: 'zlib', inflate: inflateSync, deflate: deflateSync },
+}
 
 export class NbtDocument extends Disposable implements vscode.CustomDocument {
 
@@ -51,7 +62,54 @@ export class NbtDocument extends Disposable implements vscode.CustomDocument {
 
 		logger.info(`Parsed NBT [compression=${file.compression ?? 'none'}, littleEndian=${file.littleEndian ?? false}, bedrockHeader=${file.bedrockHeader ?? 'none'}]`)
 
-		return file
+		return NbtDocument.transformCompression(file, 'structure', logger)
+	}
+
+	private static transformCompression(file: NbtFile | NbtRegion, key: string, logger: Logger): NbtFile | NbtRegion {
+		if (file instanceof NbtRegion) {
+			return file
+		}
+
+		const compression = compressionModes[file.root.getNumber('compression')]
+		if (!compression) return file
+
+		const tag = file.root.get(key)
+		if (!tag) return file
+
+		try {
+			const transformation = NbtDocument.transformCompressedTag(tag, file.littleEndian, compression)
+			if (!transformation) return file
+
+			const root = NbtCompound.create()
+			file.root.forEach((rootKey, value) => root.set(rootKey, value))
+			root.set(key, transformation.tag)
+			const transformedFile = new NbtFile(file.name, root, file.compression, file.littleEndian, file.bedrockHeader)
+			logger.info(`${transformation.direction} NBT '${key}' [compression=${compression.name}]`)
+			return transformedFile
+		} catch (error) {
+			logger.error(`Failed to transform compressed NBT tag '${key}'`, error)
+			return file
+		}
+	}
+
+	private static transformCompressedTag(
+		tag: NbtTag,
+		littleEndian: boolean,
+		compression: CompressionMode,
+	): { tag: NbtTag, direction: 'Inflated' | 'Deflated' } | null {
+		if (tag.isByteArray()) {
+			const compressed = Buffer.from(tag.toSimplifiedJson())
+			const nbtData = compression.inflate(compressed)
+			return { tag: NbtFile.read(nbtData, { littleEndian }).root, direction: 'Inflated' }
+		}
+
+		if (tag.isCompound()) {
+			const nbtData = new NbtFile('', tag, 'none', littleEndian, undefined).write()
+			const compressed = compression.deflate(nbtData)
+			return { tag: new NbtByteArray(new Int8Array(compressed)), direction: 'Deflated' }
+		}
+
+		return null
 	}
 
 
@@ -190,7 +248,7 @@ export class NbtDocument extends Disposable implements vscode.CustomDocument {
 			return
 		}
 
-		const nbtFile = this._documentData
+		const nbtFile = NbtDocument.transformCompression(this._documentData, 'structure', this.logger)
 		if (cancellation.isCancellationRequested) {
 			return
 		}
