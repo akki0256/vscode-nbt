@@ -183,14 +183,17 @@ export function mcstructureToStructure(root: NbtCompound) {
 
 	const blockPositionData = defaultPalette.getCompound('block_position_data')
 
-	const indices = structureCompound.getList('block_indices', NbtType.List).getList(0, NbtType.Int).map(e => e.getAsNumber())
+	const formatVersion = root.getNumber('format_version')
+	const indices = formatVersion === 1 ?
+		structureCompound.getList('block_indices', NbtType.List).getList(0, NbtType.Int).map(e => e.getAsNumber()) :
+		structureCompound.getList('block_indices', NbtType.IntArray).get(0)?.toSimplifiedJson()
 
 	const blocks: { pos: BlockPos, state: number, nbt?: NbtCompound }[] = []
 	for (let x = 0; x < width; x += 1) {
 		for (let y = 0; y < height; y += 1) {
 			for (let z = 0; z < length; z += 1) {
 				const i = (x * height + y) * length + z
-				const state = indices[i]
+				const state = indices?.[i]
 				if (state === undefined || state === -1) continue
 				if (state > palette.length - 1) {
 					console.error(`Invalid palette ID ${state}`)
